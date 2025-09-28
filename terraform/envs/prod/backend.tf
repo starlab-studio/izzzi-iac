@@ -4,6 +4,6 @@ terraform {
     key            = "izzzi.tfstate"
     region         = "eu-west-3"
     profile        = "izzzi/starlab"
-    dynamodb_table = "izzzi-terraform-locks"
+    use_lockfile   = true
   }
 }
