@@ -29,3 +29,20 @@ module "vpc-prod" {
     Name = "izzzi-prod-vpc"
   }
 }
+
+# First EC2 instance
+module "ec2-first-instance" {
+  source = "../../modules/ec2"
+
+  ami = "ami-0d8c6c2b092ebb980"
+  instance_type = "t2.micro"
+  availability_zone = "eu-west-3a"
+  security_groups = [module.vpc-prod.default_security_group_id]
+  subnet_id = module.vpc-prod.private_subnets[0]
+  user_data = file("user-data.sh")
+  tags = {
+    Environment = "prod"
+    Name = "izzzi-prod-first-instance"
+  }
+  region = "eu-west-3"
+}
