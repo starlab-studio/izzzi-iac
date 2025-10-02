@@ -57,3 +57,8 @@ output "public_network_acl_id" {
   description = "ID of the public network ACL"
   value = module.this.public_network_acl_id
 }
+
+output "default_security_group_id" {
+  description = "ID of the default security group"
+  value = module.this.default_security_group_id
+}
