@@ -8,11 +8,6 @@ variable "instance_type" {
   description = "The instance type to use for the instance"
 }
 
-variable "availability_zone" {
-  type = string
-  description = "The availability zone to use for the instance"
-}
-
 variable "user_data" {
   type = string
   description = "The user data to use for the instance"
@@ -28,12 +23,7 @@ variable "subnet_id" {
   description = "The subnet ID to use for the instance"
 }
 
-variable "security_groups" {
+variable "vpc_security_group_ids" {
   type = list(string)
-  description = "The security groups to use for the instance"
-}
-
-variable "region" {
-  type = string
-  description = "The region to use for the instance"
+  description = "List of security group IDs to associate with."
 }
