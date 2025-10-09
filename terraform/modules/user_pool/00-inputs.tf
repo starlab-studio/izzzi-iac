@@ -102,7 +102,7 @@ variable "mfa_configuration" {
 variable "allow_admin_create_user_only" {
   type        = bool
   description = "Wether only the administrator is allowed to create user profiles"
-  default     = true
+  default     = false
 }
 
 variable "invite_message_template" {
