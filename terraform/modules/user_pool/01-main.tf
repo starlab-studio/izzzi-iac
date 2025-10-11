@@ -69,6 +69,18 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
+  schema {
+    attribute_data_type = "String"
+    name                = "organization"
+    required            = false
+    mutable             = true
+
+    string_attribute_constraints {
+      min_length = 1
+      max_length = 256
+    }
+  }
+
   # Tags
   tags = var.tags
 }
