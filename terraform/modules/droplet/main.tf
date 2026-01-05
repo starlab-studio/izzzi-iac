@@ -13,15 +13,15 @@ locals {
   )
   
   manager_tags = concat(
-    [for k, v in local.common_tags : "${k}:${v}"],
-    ["Role:manager", "Swarm:manager"],
-    var.manager_tags
+    [for k, v in local.common_tags : "${lower(k)}:${lower(v)}"],
+    ["role:manager", "swarm:manager"],
+    [for tag in var.manager_tags : lower(tag)]
   )
   
   worker_tags = concat(
-    [for k, v in local.common_tags : "${k}:${v}"],
-    ["Role:worker", "Swarm:worker"],
-    var.worker_tags
+    [for k, v in local.common_tags : "${lower(k)}:${lower(v)}"],
+    ["role:worker", "swarm:worker"],
+    [for tag in var.worker_tags : lower(tag)]
   )
   
   cloud_init_config = templatefile("${path.module}/cloud-init.yaml.tpl", {
