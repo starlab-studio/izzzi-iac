@@ -19,7 +19,7 @@ module "firewall" {
   project_name = "izzzi"
   environment  = "staging"
   vpc_cidr     = "10.10.0.0/16"
-  
+
   droplet_ids = concat(
     [module.droplets.manager_id],
     module.droplets.worker_ids
@@ -41,38 +41,40 @@ module "firewall" {
 
 ## Variables
 
-| Nom                  | Type          | Description                                                      | Défaut        | Requis |
-| -------------------- | ------------- | ---------------------------------------------------------------- | ------------- | ------ |
-| `project_name`       | `string`      | Nom du projet (utilisé pour le nommage et les tags)              | -             | Oui    |
-| `environment`        | `string`      | Nom de l'environnement (staging, production, dev)                | -             | Oui    |
-| `vpc_cidr`           | `string`      | CIDR block du VPC pour les règles de firewall interne            | -             | Oui    |
-| `droplet_ids`        | `list(string)`| Liste des IDs des droplets à protéger                            | -             | Oui    |
-| `allowed_ssh_ips`    | `list(string)`| Liste des IPs/CIDR autorisés pour SSH                            | `["0.0.0.0/0"]`| Non    |
-| `manager_droplet_ids`| `list(string)`| Liste des IDs des managers (référence, optionnel)                | `[]`           | Non    |
-| `worker_droplet_ids` | `list(string)`| Liste des IDs des workers (référence, optionnel)                  | `[]`           | Non    |
-| `common_tags`        | `map(string)` | Tags communs à appliquer aux ressources                          | `{}`           | Non    |
+| Nom                   | Type           | Description                                           | Défaut          | Requis |
+| --------------------- | -------------- | ----------------------------------------------------- | --------------- | ------ |
+| `project_name`        | `string`       | Nom du projet (utilisé pour le nommage et les tags)   | -               | Oui    |
+| `environment`         | `string`       | Nom de l'environnement (staging, production, dev)     | -               | Oui    |
+| `vpc_cidr`            | `string`       | CIDR block du VPC pour les règles de firewall interne | -               | Oui    |
+| `droplet_ids`         | `list(string)` | Liste des IDs des droplets à protéger                 | -               | Oui    |
+| `allowed_ssh_ips`     | `list(string)` | Liste des IPs/CIDR autorisés pour SSH                 | `["0.0.0.0/0"]` | Non    |
+| `manager_droplet_ids` | `list(string)` | Liste des IDs des managers (référence, optionnel)     | `[]`            | Non    |
+| `worker_droplet_ids`  | `list(string)` | Liste des IDs des workers (référence, optionnel)      | `[]`            | Non    |
+| `common_tags`         | `map(string)`  | Tags communs à appliquer aux ressources               | `{}`            | Non    |
 
 ## Outputs
 
-| Nom                    | Description                                    |
-| ---------------------- | ---------------------------------------------- |
-| `web_firewall_id`      | ID du firewall web (HTTP/HTTPS)                |
-| `web_firewall_name`    | Nom du firewall web                             |
-| `internal_firewall_id` | ID du firewall interne (Swarm/services)         |
-| `internal_firewall_name`| Nom du firewall interne                        |
-| `management_firewall_id`| ID du firewall management (SSH)                |
-| `management_firewall_name`| Nom du firewall management                    |
-| `all_firewall_ids`     | Liste de tous les IDs de firewalls              |
+| Nom                        | Description                             |
+| -------------------------- | --------------------------------------- |
+| `web_firewall_id`          | ID du firewall web (HTTP/HTTPS)         |
+| `web_firewall_name`        | Nom du firewall web                     |
+| `internal_firewall_id`     | ID du firewall interne (Swarm/services) |
+| `internal_firewall_name`   | Nom du firewall interne                 |
+| `management_firewall_id`   | ID du firewall management (SSH)         |
+| `management_firewall_name` | Nom du firewall management              |
+| `all_firewall_ids`         | Liste de tous les IDs de firewalls      |
 
 ## Règles de Firewall
 
 ### Web Firewall
 
 **Inbound:**
+
 - **TCP 80** (HTTP): Depuis `0.0.0.0/0` (public)
 - **TCP 443** (HTTPS): Depuis `0.0.0.0/0` (public)
 
 **Outbound:**
+
 - **TCP 1-65535**: Vers `0.0.0.0/0` (tous les ports)
 - **UDP 1-65535**: Vers `0.0.0.0/0` (tous les ports)
 - **ICMP**: Vers `0.0.0.0/0`
@@ -80,6 +82,7 @@ module "firewall" {
 ### Internal Firewall
 
 **Inbound (depuis VPC CIDR uniquement):**
+
 - **TCP 2377**: Docker Swarm management
 - **TCP 7946**: Docker Swarm container network discovery
 - **UDP 7946**: Docker Swarm container network discovery
@@ -88,6 +91,7 @@ module "firewall" {
 - **TCP 6379**: Redis (single instance)
 
 **Outbound:**
+
 - **TCP 1-65535**: Vers VPC CIDR
 - **UDP 1-65535**: Vers VPC CIDR
 - **ICMP**: Vers VPC CIDR
@@ -95,9 +99,11 @@ module "firewall" {
 ### Management Firewall
 
 **Inbound:**
+
 - **TCP 22** (SSH): Depuis la liste d'IPs autorisées (variable `allowed_ssh_ips`)
 
 **Outbound:**
+
 - **TCP 1-65535**: Vers `0.0.0.0/0` (tous les ports)
 - **UDP 1-65535**: Vers `0.0.0.0/0` (tous les ports)
 - **ICMP**: Vers `0.0.0.0/0`
@@ -107,6 +113,7 @@ module "firewall" {
 Les firewalls suivent la convention: `{project_name}-{environment}-fw-{type}`
 
 Exemples:
+
 - `izzzi-staging-fw-web`
 - `izzzi-staging-fw-internal`
 - `izzzi-staging-fw-management`
@@ -114,6 +121,7 @@ Exemples:
 ## Tags automatiques
 
 Chaque firewall reçoit automatiquement les tags suivants:
+
 - Tags communs (Project, ManagedBy, Environment, Component)
 - `Firewall:web`, `Firewall:internal`, ou `Firewall:management`
 - `Type:public`, `Type:private`, ou `Type:admin`
@@ -123,6 +131,7 @@ Chaque firewall reçoit automatiquement les tags suivants:
 ### Recommandations pour la production
 
 1. **SSH Access**: Restreignez `allowed_ssh_ips` à des IPs spécifiques:
+
    ```hcl
    allowed_ssh_ips = [
      "203.0.113.0/24",  # Office network
@@ -176,14 +185,13 @@ module "droplets" {
 
 module "firewall" {
   source = "../../modules/firewall"
-  
+
   droplet_ids = concat(
     [module.droplets.manager_id],
     module.droplets.worker_ids
   )
-  
+
   vpc_cidr = module.networking.vpc_cidr
   # ... autres variables
 }
 ```
-
