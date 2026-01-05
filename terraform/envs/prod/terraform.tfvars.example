@@ -1,0 +1,74 @@
+# Digital Ocean API Token
+# IMPORTANT: Use environment variable TF_VAR_do_token instead of setting here
+# export TF_VAR_do_token="your-do-api-token"
+# do_token = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Region
+region = "fra1"
+# region = "ams3"  # Alternative: Amsterdam
+
+# Domain Configuration
+domain_name = "izzzi.app"
+# domain_name = "example.com"  # Your custom domain
+
+# VPC Configuration
+vpc_cidr = "10.10.0.0/16"
+# vpc_cidr = "10.20.0.0/16"  # Alternative CIDR if needed
+
+# SSH Configuration
+# IMPORTANT: Use environment variable TF_VAR_ssh_public_key or provide path to key file
+# export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
+# ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..."
+
+ssh_key_name = "izzzi-prod-key"
+# ssh_key_name = "my-custom-key-name"
+
+# SSH Access Control - PRODUCTION SECURITY REQUIREMENT
+# ⚠️ REQUIRED: Must specify specific IPs/CIDR blocks. Cannot be empty or 0.0.0.0/0
+# Example for office network and VPN:
+allowed_ssh_ips = [
+  "203.0.113.0/24",   # Office network
+  "198.51.100.0/24",  # VPN network
+  "192.0.2.100/32"    # Specific IP
+]
+# DO NOT use: allowed_ssh_ips = ["0.0.0.0/0"]  # This will fail validation
+
+# Droplet Tags (optional)
+manager_tags = []
+# manager_tags = ["custom-tag-1", "custom-tag-2"]
+
+worker_tags = []
+# worker_tags = ["custom-tag-1", "custom-tag-2"]
+
+# IPv6 Support
+enable_ipv6 = false
+# enable_ipv6 = true
+
+# Terraform Backend Configuration (Spaces)
+terraform_backend_bucket = "izzzi-terraform-state"
+# terraform_backend_bucket = "my-custom-state-bucket"
+
+terraform_backend_region = "fra1"
+# terraform_backend_region = "ams3"
+
+terraform_backend_key = "production/terraform.tfstate"
+# terraform_backend_key = "production/custom-path.tfstate"
+
+terraform_backend_endpoint = "https://fra1.digitaloceanspaces.com"
+# terraform_backend_endpoint = "https://ams3.digitaloceanspaces.com"
+
+# Spaces Credentials (for backend)
+# IMPORTANT: Use environment variables instead of setting here
+# export TF_VAR_spaces_access_id="your-spaces-access-key"
+# export TF_VAR_spaces_secret_key="your-spaces-secret-key"
+# spaces_access_id = "your-spaces-access-key"
+# spaces_secret_key = "your-spaces-secret-key"
+
+# Database Credentials (for connection string template)
+# These are used in outputs only, not for creating resources
+# IMPORTANT: Use environment variables for sensitive values
+# export TF_VAR_database_user="izzzi_user"
+# export TF_VAR_database_password="your-secure-password"
+# database_user = "izzzi_user"
+# database_password = "your-secure-password"
+
