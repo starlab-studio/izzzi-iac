@@ -10,7 +10,7 @@ Infrastructure Terraform pour déployer l'application IZZZI (plateforme éducati
 - **Base de données**: PostgreSQL avec pgvector (2 schémas: `public` pour backend, `ai` pour AI service)
 - **Cache**: Redis partagé (différentes DBs pour cache, celery broker, celery results)
 - **Orchestration**: Docker Swarm
-- **Environnements**: staging et production
+- **Environnements**: developpement et production
 - **Région**: Frankfurt (fra1) ou Amsterdam (ams3)
 
 ## Prérequis
@@ -31,7 +31,7 @@ terraform/
 │   ├── firewall/     # Firewall rules
 │   └── dns/          # DNS records
 ├── envs/             # Configurations par environnement
-│   ├── dev/          # Environnement de développement/staging
+│   ├── dev/          # Environnement de développement
 │   └── prod/         # Environnement de production
 ├── main.tf           # Configuration principale
 ├── variables.tf      # Variables globales
@@ -76,9 +76,9 @@ terraform init
 3. Sélectionnez le workspace approprié (ou créez-le):
 
 ```bash
-terraform workspace select staging
+terraform workspace select dev
 # ou
-terraform workspace new staging
+terraform workspace new dev
 ```
 
 ### Planification
@@ -105,7 +105,7 @@ terraform destroy
 
 - `do_token`: Token API Digital Ocean (sensible)
 - `project_name`: Nom du projet (défaut: "izzzi")
-- `environment`: Environnement (staging, production, dev)
+- `environment`: Environnement (production, dev)
 - `region`: Région Digital Ocean (fra1 ou ams3)
 - `terraform_backend_bucket`: Nom du bucket Spaces pour le state
 - `terraform_backend_region`: Région du bucket Spaces
@@ -121,14 +121,14 @@ Chaque environnement (`envs/dev/` et `envs/prod/`) peut avoir ses propres variab
 
 Toutes les ressources suivent la convention: `{project}-{environment}-{resource}`
 
-Exemple: `izzzi-staging-droplet-frontend-01`
+Exemple: `izzzi-dev-droplet-frontend-01`
 
 ## Workspaces Terraform
 
 Utilisez les workspaces Terraform pour gérer les différents environnements:
 
-- `staging`: Environnement de staging
-- `production`: Environnement de production
+- `dev`: Environnement de developpement
+- `prod`: Environnement de production
 
 ## Sécurité
 
