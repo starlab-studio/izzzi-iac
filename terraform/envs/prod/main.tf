@@ -51,7 +51,7 @@ module "droplets" {
   worker_tags  = var.worker_tags
 
   enable_monitoring = true
-  enable_backups    = true  # Backups activés en production
+  enable_backups    = true
   enable_ipv6       = var.enable_ipv6
 
   common_tags = local.common_tags

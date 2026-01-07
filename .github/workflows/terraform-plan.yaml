@@ -1,0 +1,343 @@
+name: Terraform CI/CD
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-plan.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-plan.yaml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+env:
+  TF_VERSION: "1.9.0"
+  AWS_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_KEY }}
+  DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+
+jobs:
+  # ============================================
+  # VALIDATE - Check Terraform code formatting and syntax
+  # ============================================
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Format Check
+        id: fmt
+        run: |
+          cd terraform/envs/dev
+          terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Terraform Format Check (Prod)
+        id: fmt-prod
+        run: |
+          cd terraform/envs/prod
+          terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Configure AWS credentials for Spaces
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.SPACES_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.SPACES_SECRET_KEY }}" >> $GITHUB_ENV
+
+      - name: Terraform Init (Dev)
+        id: init-dev
+        run: |
+          cd terraform/envs/dev
+          terraform init
+        continue-on-error: true
+
+      - name: Terraform Validate (Dev)
+        id: validate-dev
+        run: |
+          cd terraform/envs/dev
+          terraform validate
+        continue-on-error: true
+
+      - name: Terraform Init (Prod)
+        id: init-prod
+        run: |
+          cd terraform/envs/prod
+          terraform init
+        continue-on-error: true
+
+      - name: Terraform Validate (Prod)
+        id: validate-prod
+        run: |
+          cd terraform/envs/prod
+          terraform validate
+        continue-on-error: true
+
+      - name: Check Validation Results
+        run: |
+          if [ "${{ steps.fmt.outcome }}" != "success" ] || [ "${{ steps.fmt-prod.outcome }}" != "success" ]; then
+            echo "::error::Terraform format check failed. Run 'terraform fmt' to fix."
+            exit 1
+          fi
+          if [ "${{ steps.validate-dev.outcome }}" != "success" ] || [ "${{ steps.validate-prod.outcome }}" != "success" ]; then
+            echo "::error::Terraform validation failed."
+            exit 1
+          fi
+
+  # ============================================
+  # SECURITY SCAN - Scan Terraform code for security issues
+  # ============================================
+  security-scan:
+    name: Security Scan
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: terraform
+          soft_fail: true
+
+  # ============================================
+  # PLAN - Generate Terraform execution plan
+  # ============================================
+  plan:
+    name: Plan Terraform (${{ matrix.environment }})
+    needs: [validate, security-scan]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+        include:
+          - environment: dev
+            env_name: staging
+          - environment: prod
+            env_name: production
+    # Only run plan for environments that have changes
+    if: |
+      github.event_name == 'pull_request' ||
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == matrix.environment)
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials for Spaces
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.SPACES_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.SPACES_SECRET_KEY }}" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        working-directory: terraform/envs/${{ matrix.environment }}
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: terraform/envs/${{ matrix.environment }}
+        run: |
+          terraform plan -out=tfplan -no-color
+        continue-on-error: true
+
+      - name: Save Plan Output
+        id: plan-output
+        working-directory: terraform/envs/${{ matrix.environment }}
+        if: steps.plan.outcome == 'success'
+        run: |
+          terraform show -no-color tfplan > plan.txt || true
+          # Tronquer si trop long (GitHub limit: 65536 chars pour outputs)
+          if [ $(wc -c < plan.txt) -gt 60000 ]; then
+            head -c 30000 plan.txt > plan_truncated.txt
+            echo -e "\n\n... (plan truncated, too long for comment) ...\n\n" >> plan_truncated.txt
+            tail -c 30000 plan.txt >> plan_truncated.txt
+            mv plan_truncated.txt plan.txt
+          fi
+          echo "plan_output<<EOF" >> $GITHUB_OUTPUT
+          cat plan.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        if: steps.plan.outcome == 'success'
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.run_id }}
+          path: terraform/envs/${{ matrix.environment }}/tfplan
+          retention-days: 5
+
+      - name: Comment PR with Plan
+        if: github.event_name == 'pull_request' && steps.plan.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `### Terraform Plan for \`${{ matrix.environment }}\` environment
+            <details>
+            <summary>Show Plan</summary>
+
+            \`\`\`
+            ${{ steps.plan-output.outputs.plan_output }}
+            \`\`\`
+
+            </details>
+
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "::error::Terraform plan failed for ${{ matrix.environment }} environment"
+          exit 1
+
+  # ============================================
+  # APPLY - Apply Terraform changes
+  # ============================================
+  apply:
+    name: Apply Terraform (${{ matrix.environment }})
+    needs: plan
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ matrix.env_name }}
+      url: https://app.digitalocean.com
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [dev, prod]
+        include:
+          - environment: dev
+            env_name: staging
+          - environment: prod
+            env_name: production
+    # Only apply on workflow_dispatch (all apply are manual)
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment == matrix.environment
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials for Spaces
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.SPACES_ACCESS_KEY_ID }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.SPACES_SECRET_KEY }}" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        working-directory: terraform/envs/${{ matrix.environment }}
+        run: terraform init
+
+      - name: Download Plan Artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: tfplan-${{ matrix.environment }}-${{ github.run_id }}
+          path: terraform/envs/${{ matrix.environment }}
+
+      - name: Verify Plan File Exists
+        working-directory: terraform/envs/${{ matrix.environment }}
+        run: |
+          if [ ! -f tfplan ]; then
+            if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+              echo "::error::Plan file (tfplan) not found. The artifact may not exist from the plan job. Please ensure the plan job completed successfully."
+            else
+              echo "::error::Plan file (tfplan) not found. Cannot proceed with apply."
+            fi
+            exit 1
+          fi
+
+      - name: Terraform Apply
+        id: apply
+        working-directory: terraform/envs/${{ matrix.environment }}
+        run: terraform apply -auto-approve tfplan
+
+      - name: Get Terraform Outputs
+        id: outputs
+        working-directory: terraform/envs/${{ matrix.environment }}
+        if: steps.apply.outcome == 'success'
+        run: |
+          terraform output -json > outputs.json
+          echo "outputs<<EOF" >> $GITHUB_OUTPUT
+          cat outputs.json >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Comment with Apply Results
+        if: steps.apply.outcome == 'success' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outputs = JSON.parse(`${{ steps.outputs.outputs.outputs }}`);
+            const output = `### ✅ Terraform Apply Successful for \`${{ matrix.environment }}\` environment
+
+            **Outputs:**
+            \`\`\`json
+            ${JSON.stringify(outputs, null, 2)}
+            \`\`\`
+
+            *Applied by: @${{ github.actor }}*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Create Deployment Summary
+        if: steps.apply.outcome == 'success'
+        run: |
+          echo "## Terraform Apply Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ matrix.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "**Applied by:** @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Outputs:" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat terraform/envs/${{ matrix.environment }}/outputs.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Apply Status
+        if: steps.apply.outcome == 'failure'
+        run: |
+          echo "::error::Terraform apply failed for ${{ matrix.environment }} environment"
+          exit 1
