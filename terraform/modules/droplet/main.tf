@@ -70,6 +70,9 @@ resource "digitalocean_droplet" "manager" {
   lifecycle {
     create_before_destroy = true
     prevent_destroy       = false
+    ignore_changes = [
+      ssh_keys,
+    ]
   }
   
   timeouts {
@@ -101,6 +104,9 @@ resource "digitalocean_droplet" "workers" {
   lifecycle {
     create_before_destroy = true
     prevent_destroy       = false
+    ignore_changes = [
+      ssh_keys,
+    ]
   }
   
   timeouts {
