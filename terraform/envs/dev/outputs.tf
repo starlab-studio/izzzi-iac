@@ -102,3 +102,11 @@ output "all_droplet_private_ips" {
   value       = module.droplets.all_droplet_private_ips
 }
 
+output "dns_info" {
+  description = "DNS records information"
+  value = {
+    records = module.dns.all_records
+    urls    = module.dns.dns_urls
+  }
+}
+

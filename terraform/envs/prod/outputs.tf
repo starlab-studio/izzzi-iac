@@ -148,8 +148,16 @@ output "security_info" {
     ssh_restricted     = true
     allowed_ssh_ips    = var.allowed_ssh_ips
     backups_enabled    = true
-    monitoring_enabled = true
+    monitoring_enabled  = true
     note               = "SSH access restricted to specific IPs. Backups enabled on manager node."
+  }
+}
+
+output "dns_info" {
+  description = "DNS records information"
+  value = {
+    records = module.dns.all_records
+    urls    = module.dns.dns_urls
   }
 }
 
