@@ -8,7 +8,7 @@ region = "fra1"
 # region = "ams3"  # Alternative: Amsterdam
 
 # Domain Configuration
-domain_name = "izzzi.app"
+domain_name = "smoothbill.fr"
 # domain_name = "example.com"  # Your custom domain
 
 # VPC Configuration

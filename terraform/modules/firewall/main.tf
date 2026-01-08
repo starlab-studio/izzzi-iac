@@ -3,15 +3,22 @@ locals {
   internal_firewall_name  = "${var.project_name}-${var.environment}-fw-internal"
   management_firewall_name = "${var.project_name}-${var.environment}-fw-management"
   
+  # Use lowercase format to match droplet tags (Digital Ocean is case-sensitive)
   common_tags = merge(
-    var.common_tags,
     {
-      Project     = var.project_name
-      ManagedBy   = "terraform"
-      Environment = var.environment
-      Component   = "firewall"
-    }
+      project     = var.project_name
+      managedby   = "terraform"
+      environment = var.environment
+    },
+    var.common_tags
   )
+  
+  # Limit to 3 tags to leave room for 2 specific tags (max 5 total)
+  limited_common_tags = {
+    project     = local.common_tags.project
+    managedby   = local.common_tags.managedby
+    environment = local.common_tags.environment
+  }
 }
 
 # Web Firewall - For HTTP/HTTPS traffic
@@ -53,9 +60,14 @@ resource "digitalocean_firewall" "web" {
   droplet_ids = var.droplet_ids
 
   tags = concat(
-    [for k, v in local.common_tags : "${k}:${v}"],
-    ["Firewall:web", "Type:public"]
+    [for k, v in local.limited_common_tags : "${k}:${v}"],
+    ["firewall:web", "type:public"]
   )
+
+  depends_on = [
+    digitalocean_tag.common_tags,
+    digitalocean_tag.firewall_tags
+  ]
 
   lifecycle {
     create_before_destroy = true
@@ -127,8 +139,8 @@ resource "digitalocean_firewall" "internal" {
   droplet_ids = var.droplet_ids
 
   tags = concat(
-    [for k, v in local.common_tags : "${k}:${v}"],
-    ["Firewall:internal", "Type:private"]
+    [for k, v in local.limited_common_tags : "${k}:${v}"],
+    ["firewall:internal", "type:private"]
   )
 
   lifecycle {
@@ -169,8 +181,8 @@ resource "digitalocean_firewall" "management" {
   droplet_ids = var.droplet_ids
 
   tags = concat(
-    [for k, v in local.common_tags : "${k}:${v}"],
-    ["Firewall:management", "Type:admin"]
+    [for k, v in local.limited_common_tags : "${k}:${v}"],
+    ["firewall:management", "type:admin"]
   )
 
   lifecycle {

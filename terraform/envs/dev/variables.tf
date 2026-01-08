@@ -15,9 +15,9 @@ variable "region" {
 }
 
 variable "domain_name" {
-  description = "Base domain name for the environment (e.g., izzzi.app)"
+  description = "Base domain name for the environment (e.g., smoothbill.fr or dev.smoothbill.fr)"
   type        = string
-  default     = "izzzi.app"
+  default     = "smoothbill.fr"
 }
 
 variable "vpc_cidr" {

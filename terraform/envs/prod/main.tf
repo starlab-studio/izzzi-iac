@@ -51,7 +51,7 @@ module "droplets" {
   worker_tags  = var.worker_tags
 
   enable_monitoring = true
-  enable_backups    = true  # Backups activés en production
+  enable_backups    = true
   enable_ipv6       = var.enable_ipv6
 
   common_tags = local.common_tags
@@ -78,15 +78,16 @@ module "firewall" {
   common_tags = local.common_tags
 }
 
-# Note: Module DNS à créer ultérieurement
-# module "dns" {
-#   source = "../../modules/dns"
-#   
-#   project_name = local.project_name
-#   environment  = local.environment
-#   domain_name  = local.domain_name
-#   
-#   manager_ip = module.droplets.manager_public_ip
-#   worker_ips = module.droplets.worker_public_ips
-# }
+# DNS - Gestion des enregistrements DNS
+module "dns" {
+  source = "../../modules/dns"
+  
+  project_name = local.project_name
+  environment  = local.environment
+  domain_name  = local.domain_name
+  
+  manager_ip = module.droplets.manager_public_ip
+  
+  common_tags = local.common_tags
+}
 

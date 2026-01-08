@@ -1,8 +1,3 @@
-locals {
-  domain_name = var.domain_name
-  prod_domain = local.domain_name
-}
-
 output "manager_ip" {
   description = "Public IP address of the Swarm manager node"
   value       = module.droplets.manager_public_ip
@@ -25,17 +20,17 @@ output "worker_private_ips" {
 
 output "api_url" {
   description = "API URL for the backend service"
-  value       = "https://api.${local.prod_domain}"
+  value       = "https://api.${local.domain_name}"
 }
 
 output "ai_url" {
   description = "AI service URL"
-  value       = "https://ai.${local.prod_domain}"
+  value       = "https://ai.${local.domain_name}"
 }
 
 output "frontend_url" {
   description = "Frontend URL"
-  value       = "https://${local.prod_domain}"
+  value       = "https://${local.domain_name}"
 }
 
 output "database_info" {
@@ -153,8 +148,16 @@ output "security_info" {
     ssh_restricted     = true
     allowed_ssh_ips    = var.allowed_ssh_ips
     backups_enabled    = true
-    monitoring_enabled = true
+    monitoring_enabled  = true
     note               = "SSH access restricted to specific IPs. Backups enabled on manager node."
+  }
+}
+
+output "dns_info" {
+  description = "DNS records information"
+  value = {
+    records = module.dns.all_records
+    urls    = module.dns.dns_urls
   }
 }
 
