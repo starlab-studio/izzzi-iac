@@ -1,0 +1,46 @@
+---
+# Initialize Docker Swarm cluster only (without deploying application)
+
+- name: Configure all nodes with common settings
+  hosts: all
+  become: yes
+  roles:
+    - common
+    - docker
+  tags: [setup, common, docker]
+
+- name: Initialize Docker Swarm on manager
+  hosts: managers
+  gather_facts: yes
+  roles:
+    - swarm-manager
+  tags: [setup, swarm, manager]
+
+- name: Join workers to Docker Swarm
+  hosts: workers
+  gather_facts: yes
+  roles:
+    - swarm-worker
+  tags: [setup, swarm, worker]
+
+- name: Display cluster information
+  hosts: managers
+  gather_facts: no
+  tasks:
+    - name: Show Swarm nodes
+      command: docker node ls
+      register: swarm_nodes
+      changed_when: false
+
+    - name: Display nodes
+      debug:
+        msg: "{{ swarm_nodes.stdout_lines }}"
+
+    - name: Show overlay networks
+      command: docker network ls --filter driver=overlay
+      register: overlay_networks
+      changed_when: false
+
+    - name: Display networks
+      debug:
+        msg: "{{ overlay_networks.stdout_lines }}"

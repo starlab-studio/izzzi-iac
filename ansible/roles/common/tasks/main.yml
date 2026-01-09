@@ -1,0 +1,80 @@
+---
+# Common role - Base system configuration for all nodes
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: [common, apt]
+
+- name: Upgrade all packages
+  apt:
+    upgrade: dist
+    autoremove: yes
+    autoclean: yes
+  tags: [common, apt, upgrade]
+
+- name: Install base packages
+  apt:
+    name: "{{ system_packages }}"
+    state: present
+  tags: [common, packages]
+
+- name: Set timezone
+  timezone:
+    name: "{{ timezone }}"
+  tags: [common, timezone]
+
+- name: Configure UFW firewall
+  block:
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Configure UFW allowed ports
+      ufw:
+        rule: allow
+        port: "{{ item.port | string }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      loop: "{{ ufw_allowed_ports }}"
+      when: ufw_allowed_ports is defined
+  tags: [common, firewall]
+
+- name: Ensure deploy user exists
+  user:
+    name: "{{ app_user }}"
+    groups: sudo
+    shell: /bin/bash
+    create_home: yes
+    state: present
+  tags: [common, user]
+
+- name: Add deploy user to sudoers
+  lineinfile:
+    path: /etc/sudoers.d/{{ app_user }}
+    line: "{{ app_user }} ALL=(ALL) NOPASSWD:ALL"
+    create: yes
+    mode: "0440"
+    validate: "visudo -cf %s"
+  tags: [common, user]
+
+- name: Create application directory
+  file:
+    path: "{{ app_deployment_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0755"
+  tags: [common, directories]
+
+- name: Create backups directory
+  file:
+    path: "{{ backup_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0755"
+  tags: [common, directories, backup]

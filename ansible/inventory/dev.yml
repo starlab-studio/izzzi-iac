@@ -1,0 +1,40 @@
+# Ansible Inventory for DEV/Staging Environment
+# This file can be generated from Terraform outputs or filled manually
+#
+# To generate from Terraform:
+# cd terraform/envs/dev && terraform output -json | jq -r '.manager_ip.value' > manager_ip.txt
+
+all:
+  children:
+    managers:
+      hosts:
+        manager1:
+          ansible_host: "REPLACE_WITH_MANAGER_IP"
+          private_ip: "REPLACE_WITH_MANAGER_PRIVATE_IP"
+
+    workers:
+      hosts:
+        worker1:
+          ansible_host: "REPLACE_WITH_WORKER1_IP"
+          private_ip: "REPLACE_WITH_WORKER1_PRIVATE_IP"
+
+  vars:
+    ansible_user: deploy
+    ansible_ssh_private_key_file: ~/.ssh/izzzi_deploy
+    ansible_python_interpreter: /usr/bin/python3
+
+    # Environment specific variables
+    environment: dev
+    domain: dev.smoothbill.fr
+
+    # Docker Swarm
+    swarm_advertise_addr: "{{ hostvars[groups['managers'][0]].private_ip }}"
+
+    # Database (single instance on manager)
+    database_host: "{{ hostvars[groups['managers'][0]].private_ip }}"
+    database_port: 5432
+    database_name: izzzi
+
+    # Redis (single instance on manager)
+    redis_host: "{{ hostvars[groups['managers'][0]].private_ip }}"
+    redis_port: 6379

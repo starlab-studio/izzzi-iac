@@ -1,0 +1,69 @@
+---
+# Deploy or update application stack
+# Usage: ansible-playbook deploy.yml -e "image_tag=v1.2.3"
+# Usage: ansible-playbook deploy.yml -e "image_tag=latest service=frontend"
+
+- name: Deploy/Update Docker Stack
+  hosts: managers
+  gather_facts: true
+
+  vars:
+    target_service: "{{ service | default('all') }}"
+    # Map service names to Docker image names
+    service_image_map:
+      frontend: "{{ docker_registry }}/izzzi"
+      backend: "{{ docker_registry }}/izzzi-backend"
+      ai-api: "{{ docker_registry }}/izzzi-ai"
+
+  tasks:
+    - name: Display deployment information
+      debug:
+        msg: |
+          Deploying to {{ environment }} environment
+          Image tag: {{ image_tag }}
+          Target service: {{ target_service }}
+          Domain: {{ domain }}
+
+    - name: Deploy full stack
+      include_role:
+        name: deploy-stack
+      when: target_service == 'all'
+      tags: [deploy, full]
+
+    - name: Update specific service
+      block:
+        - name: Get image name for service
+          set_fact:
+            service_image: "{{ service_image_map[target_service] }}"
+
+        - name: Pull new image for service
+          command: >
+            docker service update
+            --image {{ service_image }}:{{ image_tag }}
+            {{ stack_name }}_{{ target_service }}
+          register: service_update
+
+        - name: Display update result
+          debug:
+            msg: "{{ service_update.stdout_lines }}"
+
+      when: target_service != 'all'
+      tags: [deploy, update, service]
+
+    - name: Wait for services to be healthy
+      command: docker stack ps {{ stack_name }} --filter "desired-state=running"
+      register: stack_ps
+      until: stack_ps.rc == 0
+      retries: 10
+      delay: 10
+      changed_when: false
+      tags: [deploy, verify]
+
+    - name: Display deployment status
+      command: docker stack services {{ stack_name }}
+      register: services_status
+      changed_when: false
+
+    - name: Show services status
+      debug:
+        msg: "{{ services_status.stdout_lines }}"

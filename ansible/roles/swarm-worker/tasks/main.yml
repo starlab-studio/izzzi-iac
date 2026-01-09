@@ -1,0 +1,36 @@
+---
+# Swarm Worker role - Join workers to Docker Swarm
+
+- name: Check if node is already in Swarm
+  command: docker info
+  register: docker_info
+  changed_when: false
+  failed_when: false
+  tags: [swarm, join]
+
+- name: Get worker join token from manager
+  set_fact:
+    worker_token: "{{ hostvars[groups['managers'][0]].swarm_worker_join_token }}"
+  when: "'Swarm: inactive' in docker_info.stdout"
+  tags: [swarm, join]
+
+- name: Join Docker Swarm as worker
+  command: >
+    docker swarm join
+    --token {{ worker_token }}
+    {{ swarm_advertise_addr }}:2377
+  when: "'Swarm: inactive' in docker_info.stdout"
+  register: swarm_join_result
+  tags: [swarm, join]
+
+- name: Verify Swarm membership
+  command: docker node ls
+  delegate_to: "{{ groups['managers'][0] }}"
+  register: swarm_nodes
+  changed_when: false
+  tags: [swarm, verify]
+
+- name: Display Swarm nodes
+  debug:
+    msg: "{{ swarm_nodes.stdout_lines }}"
+  tags: [swarm, verify]

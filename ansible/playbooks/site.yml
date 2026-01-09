@@ -1,0 +1,31 @@
+---
+# Main playbook - Full infrastructure setup and deployment
+
+- name: Configure all nodes with common settings
+  hosts: all
+  gather_facts: yes
+  roles:
+    - common
+    - docker
+  tags: [setup, common, docker]
+
+- name: Initialize Docker Swarm on manager
+  hosts: managers
+  gather_facts: yes
+  roles:
+    - swarm-manager
+  tags: [setup, swarm, manager]
+
+- name: Join workers to Docker Swarm
+  hosts: workers
+  gather_facts: yes
+  roles:
+    - swarm-worker
+  tags: [setup, swarm, worker]
+
+- name: Deploy application stack
+  hosts: managers
+  gather_facts: yes
+  roles:
+    - deploy-stack
+  tags: [deploy, stack]

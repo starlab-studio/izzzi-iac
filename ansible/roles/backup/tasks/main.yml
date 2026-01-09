@@ -1,0 +1,107 @@
+---
+# Backup role - Backup PostgreSQL database
+
+- name: Ensure backup directory exists
+  file:
+    path: "{{ backup_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0750"
+  tags: [backup, directories]
+
+- name: Set backup filename with timestamp
+  set_fact:
+    backup_filename: "{{ database_name }}_{{ backup_schema | default('full') }}_{{ ansible_date_time.iso8601_basic_short }}.sql"
+    backup_compressed_filename: "{{ database_name }}_{{ backup_schema | default('full') }}_{{ ansible_date_time.iso8601_basic_short }}.sql.gz"
+  tags: [backup]
+
+- name: Backup PostgreSQL database
+  block:
+    - name: Get PostgreSQL container ID
+      command: docker ps -q -f name={{ stack_name }}_postgres
+      register: postgres_container
+      changed_when: false
+
+    - name: Execute pg_dump in PostgreSQL container
+      shell: |
+        docker exec {{ postgres_container.stdout }} \
+          pg_dump -U {{ lookup('env', 'DB_USER') | default('izzzi_admin', true) }} \
+          {% if backup_schema is defined and backup_schema != 'full' %}
+          --schema={{ backup_schema }} \
+          {% endif %}
+          {{ database_name }} > {{ backup_dir }}/{{ backup_filename }}
+      become: yes
+      become_user: "{{ app_user }}"
+
+    - name: Compress backup file
+      archive:
+        path: "{{ backup_dir }}/{{ backup_filename }}"
+        dest: "{{ backup_dir }}/{{ backup_compressed_filename }}"
+        format: gz
+        remove: yes
+      when: backup_postgres_compress | bool
+
+  rescue:
+    - name: Backup failed
+      debug:
+        msg: "Backup failed. Check PostgreSQL container and credentials."
+      failed_when: true
+  tags: [backup, postgres]
+
+- name: Upload backup to Digital Ocean Spaces
+  block:
+    - name: Configure s3cmd for Digital Ocean Spaces
+      template:
+        src: s3cfg.j2
+        dest: /home/{{ app_user }}/.s3cfg
+        owner: "{{ app_user }}"
+        group: "{{ app_group }}"
+        mode: "0600"
+
+    - name: Upload backup to Spaces
+      command: >
+        s3cmd put {{ backup_dir }}/{{ backup_compressed_filename if backup_postgres_compress else backup_filename }}
+        s3://{{ spaces_bucket_backups }}/{{ environment }}/postgres/
+      become: yes
+      become_user: "{{ app_user }}"
+
+    - name: Verify upload
+      command: >
+        s3cmd ls s3://{{ spaces_bucket_backups }}/{{ environment }}/postgres/{{ backup_compressed_filename if backup_postgres_compress else backup_filename }}
+      become: yes
+      become_user: "{{ app_user }}"
+      register: upload_verification
+
+    - name: Upload successful
+      debug:
+        msg: "Backup uploaded successfully to Spaces: {{ upload_verification.stdout }}"
+
+  when: backup_upload_to_spaces | bool
+  tags: [backup, upload, spaces]
+
+- name: Clean up old backups (local)
+  find:
+    paths: "{{ backup_dir }}"
+    patterns: "{{ database_name }}_*.sql.gz"
+    age: "{{ backup_retention_days }}d"
+  register: old_backups
+  tags: [backup, cleanup]
+
+- name: Remove old local backups
+  file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ old_backups.files }}"
+  when: old_backups.files is defined and old_backups.files | length > 0
+  tags: [backup, cleanup]
+
+- name: Display backup summary
+  debug:
+    msg: |
+      Backup completed successfully:
+      - Filename: {{ backup_compressed_filename if backup_postgres_compress else backup_filename }}
+      - Location: {{ backup_dir }}
+      - Uploaded to Spaces: {{ backup_upload_to_spaces }}
+      - Retention: {{ backup_retention_days }} days
+  tags: [backup]

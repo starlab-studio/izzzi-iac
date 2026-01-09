@@ -281,21 +281,305 @@ terraform apply
 
 ## Architecture
 
-The infrastructure consists of:
+### **Technology Stack**
+
+| Component                    | Technology           | Version  | Purpose                           |
+| ---------------------------- | -------------------- | -------- | --------------------------------- |
+| **Infrastructure as Code**   | Terraform            | 1.7.5+   | Infrastructure provisioning       |
+| **Configuration Management** | Ansible              | 2.10+    | Server configuration & deployment |
+| **Cloud Provider**           | Digital Ocean        | -        | Cloud infrastructure              |
+| **Container Orchestration**  | Docker Swarm         | Latest   | Container orchestration           |
+| **Reverse Proxy**            | Traefik              | v3.3     | Load balancing & SSL termination  |
+| **Database**                 | PostgreSQL           | 18       | Main database with pgvector       |
+| **Cache/Queue**              | Redis                | 7-alpine | Caching & message broker          |
+| **Container Registry**       | Docker Hub           | -        | Container image storage           |
+| **Object Storage**           | Digital Ocean Spaces | -        | Backups & file storage            |
+
+### **Infrastructure Architecture**
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DIGITAL OCEAN CLOUD                             │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                    VPC (Private Network)                         │  │
+│  │                                                                  │  │
+│  │  ┌──────────────────────────────────────────────────────────┐   │  │
+│  │  │              DOCKER SWARM CLUSTER                         │   │  │
+│  │  │                                                           │   │  │
+│  │  │  ┌──────────────────┐      ┌──────────────────┐       │   │  │
+│  │  │  │  Manager Node     │      │  Worker Node 1   │       │   │  │
+│  │  │  │  (s-2vcpu-4gb)    │◄────►│  (s-2vcpu-2gb)   │       │   │  │
+│  │  │  │                   │      │                  │       │   │  │
+│  │  │  │  • Swarm Manager  │      │  • Swarm Worker  │       │   │  │
+│  │  │  │  • Traefik        │      │  • Services      │       │   │  │
+│  │  │  │  • PostgreSQL     │      │                  │       │   │  │
+│  │  │  │  • Redis          │      └──────────────────┘       │   │  │
+│  │  │  │                   │                                 │   │  │
+│  │  │  └──────────────────┘      ┌──────────────────┐       │   │  │
+│  │  │                              │  Worker Node 2   │       │   │  │
+│  │  │                              │  (s-2vcpu-2gb)   │       │   │  │
+│  │  │                              │                  │       │   │  │
+│  │  │                              │  • Swarm Worker  │       │   │  │
+│  │  │                              │  • Services      │       │   │  │
+│  │  │                              └──────────────────┘       │   │  │
+│  │  │                                                           │   │  │
+│  │  │  ┌──────────────────────────────────────────────────┐   │   │  │
+│  │  │  │         DOCKER SWARM SERVICES                     │   │   │  │
+│  │  │  │                                                   │   │   │  │
+│  │  │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │   │   │  │
+│  │  │  │  │ Traefik │  │ Frontend │  │ Backend  │       │   │   │  │
+│  │  │  │  │ (1 rep) │  │ (3 reps) │  │ (2 reps) │       │   │   │  │
+│  │  │  │  └──────────┘  └──────────┘  └──────────┘       │   │   │  │
+│  │  │  │                                                   │   │   │  │
+│  │  │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │   │   │  │
+│  │  │  │  │ AI API   │  │ Celery   │  │ Celery   │     │   │   │  │
+│  │  │  │  │ (2 reps) │  │ Worker   │  │ Beat     │     │   │   │  │
+│  │  │  │  └──────────┘  │ (2 reps) │  │ (1 rep)  │     │   │   │  │
+│  │  │  │                 └──────────┘  └──────────┘     │   │   │  │
+│  │  │  │                                                   │   │   │  │
+│  │  │  │  ┌──────────┐  ┌──────────┐                     │   │   │  │
+│  │  │  │  │PostgreSQL│  │  Redis   │                     │   │   │  │
+│  │  │  │  │(1 rep)   │  │ (1 rep)  │                     │   │   │  │
+│  │  │  │  └──────────┘  └──────────┘                     │   │   │  │
+│  │  │  └──────────────────────────────────────────────────┘   │   │  │
+│  │  └──────────────────────────────────────────────────────────┘   │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                    FIREWALLS                                      │  │
+│  │                                                                  │  │
+│  │  • Web Firewall (HTTP/HTTPS: 80, 443)                            │  │
+│  │  • Internal Firewall (Swarm: 2377, 7946, 4789)                   │  │
+│  │                   (PostgreSQL: 5432, Redis: 6379)               │  │
+│  │  • Management Firewall (SSH: 22)                                 │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │                    DNS (Digital Ocean)                            │  │
+│  │                                                                  │  │
+│  │  • smoothbill.fr → Manager IP                                     │  │
+│  │  • api.smoothbill.fr → Manager IP                                  │  │
+│  │  • ai.smoothbill.fr → Manager IP                                   │  │
+│  │  • traefik.smoothbill.fr → Manager IP                               │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+│                                                                         │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │              DIGITAL OCEAN SPACES                                 │  │
+│  │                                                                  │  │
+│  │  • Terraform State Storage                                        │  │
+│  │  • Database Backups                                               │  │
+│  │  • Application Files                                              │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### **Terraform Infrastructure**
+
+The infrastructure is managed using Terraform with the following modules:
+
+#### **Networking Module**
 
 - **VPC**: Private network for all resources
-- **Droplets**:
-  - 1 Manager node (Docker Swarm manager)
-  - 1-2 Worker nodes (Docker Swarm workers)
-- **Firewalls**:
-  - Web firewall (HTTP/HTTPS)
-  - Internal firewall (internal communication)
-  - Management firewall (SSH access)
-- **Spaces**: Object storage for backups and Terraform state
-- **Docker Swarm**: Container orchestration
-- **Traefik**: Reverse proxy and load balancer
-- **PostgreSQL**: Database with pgvector extension
-- **Redis**: Caching and message broker
+- **Region**: Configurable (default: fra1 - Frankfurt)
+- **CIDR**: Configurable IP range
+
+#### **Droplet Module**
+
+- **Manager Node**:
+  - Size: `s-2vcpu-4gb` (DEV) / `s-4vcpu-8gb` (PROD)
+  - Tags: `db:true` (hosts PostgreSQL & Redis)
+  - Cloud-init configuration
+- **Worker Nodes**:
+  - Count: 1 (DEV) / 2 (PROD)
+  - Size: `s-2vcpu-2gb` (DEV) / `s-4vcpu-8gb` (PROD)
+  - Auto-join Docker Swarm
+
+#### **Firewall Module**
+
+- **Web Firewall**: HTTP (80), HTTPS (443) from anywhere
+- **Internal Firewall**:
+  - Docker Swarm ports (2377, 7946, 4789) from VPC
+  - PostgreSQL (5432) from VPC
+  - Redis (6379) from VPC
+- **Management Firewall**: SSH (22) from allowed IPs only
+
+#### **DNS Module**
+
+- Automatic DNS record creation
+- A records for domain and subdomains
+- Let's Encrypt certificate management via Traefik
+
+#### **Spaces Module**
+
+- Object storage for backups
+- Terraform state storage
+- File storage
+
+### **Ansible Deployment**
+
+Ansible playbooks handle application deployment:
+
+#### **Playbooks**
+
+| Playbook           | Purpose                                |
+| ------------------ | -------------------------------------- |
+| `init-cluster.yml` | Initialize Docker Swarm cluster        |
+| `deploy.yml`       | Deploy/update application stack        |
+| `backup.yml`       | Backup PostgreSQL database             |
+| `rollback.yml`     | Rollback a service to previous version |
+| `scale.yml`        | Scale services (replicas)              |
+| `site.yml`         | Full deployment (init + deploy)        |
+
+#### **Ansible Roles**
+
+| Role            | Purpose                                                 |
+| --------------- | ------------------------------------------------------- |
+| `common`        | Common server configuration (packages, timezone, users) |
+| `docker`        | Docker installation and configuration                   |
+| `swarm-manager` | Docker Swarm manager setup                              |
+| `swarm-worker`  | Docker Swarm worker setup                               |
+| `deploy-stack`  | Application stack deployment                            |
+
+### **Docker Swarm Services**
+
+The application stack consists of the following services:
+
+#### **Application Services**
+
+| Service      | Image                  | Replicas | Description                                   |
+| ------------ | ---------------------- | -------- | --------------------------------------------- |
+| **traefik**  | `traefik:v3.3`         | 1        | Reverse proxy, load balancer, SSL termination |
+| **frontend** | `izzzi:latest`         | 3        | Next.js frontend application                  |
+| **backend**  | `izzzi-backend:latest` | 2        | NestJS API backend                            |
+| **ai-api**   | `izzzi-ai:latest`      | 2        | FastAPI AI service                            |
+
+#### **Background Services**
+
+| Service           | Image             | Replicas | Description                     |
+| ----------------- | ----------------- | -------- | ------------------------------- |
+| **celery-worker** | `izzzi-ai:latest` | 2        | Celery worker for async tasks   |
+| **celery-beat**   | `izzzi-ai:latest` | 1        | Celery beat for scheduled tasks |
+
+#### **Data Services**
+
+| Service      | Image                    | Replicas | Description                        |
+| ------------ | ------------------------ | -------- | ---------------------------------- |
+| **postgres** | `pgvector/pgvector:pg18` | 1        | PostgreSQL with pgvector extension |
+| **redis**    | `redis:7-alpine`         | 1        | Redis for cache and message broker |
+
+### **Service Communication Flow**
+
+```
+Internet
+   │
+   ▼
+┌──────────┐
+│ Traefik  │ (Port 80/443)
+│ (Manager)│
+└────┬─────┘
+     │
+     ├─────────────────────────────────────┐
+     │                                     │
+     ▼                                     ▼
+┌──────────┐                        ┌──────────┐
+│ Frontend │                        │ Backend  │
+│ (3 reps) │                        │ (2 reps) │
+└────┬─────┘                        └────┬─────┘
+     │                                   │
+     │                                   ├──────────────┐
+     │                                   │              │
+     ▼                                   ▼              ▼
+┌──────────┐                    ┌──────────┐  ┌──────────┐
+│ AI API   │                    │PostgreSQL │  │  Redis   │
+│ (2 reps) │                    │ (Manager) │  │ (Manager)│
+└────┬─────┘                    └───────────┘  └───────────┘
+     │                                   │              │
+     │                                   │              │
+     ▼                                   │              │
+┌──────────┐                            │              │
+│ Celery   │                            │              │
+│ Worker   │                            │              │
+│ (2 reps) │                            │              │
+└──────────┘                            │              │
+                                        │              │
+┌──────────┐                            │              │
+│ Celery   │                            │              │
+│ Beat     │                            │              │
+│ (1 rep)  │                            │              │
+└──────────┘                            │              │
+                                        │              │
+                                        └──────────────┘
+```
+
+### **Deployment Process**
+
+1. **Infrastructure Provisioning (Terraform)**
+
+   ```bash
+   cd terraform/envs/dev
+   terraform init
+   terraform plan
+   terraform apply
+   ```
+
+2. **Application Deployment (Ansible)**
+
+   ```bash
+   cd ansible
+   ansible-playbook playbooks/init-cluster.yml -i inventory/dev.yml
+   ansible-playbook playbooks/deploy.yml -i inventory/dev.yml
+   ```
+
+3. **Using Makefile (Recommended)**
+   ```bash
+   make full-deploy-dev  # Complete deployment
+   ```
+
+### **Environment Variables**
+
+All sensitive configuration is managed through environment variables:
+
+- Database credentials
+- JWT secrets
+- API keys (Stripe, OpenAI, AWS, Google OAuth)
+- Service URLs
+- Domain configuration
+
+### **Monitoring & Health Checks**
+
+- **Traefik Dashboard**: `https://traefik.smoothbill.fr` (with basic auth)
+- **Health Endpoints**:
+  - Backend: `/api/health`
+  - AI API: `/health`
+  - Frontend: `/`
+- **Service Health Checks**: Configured for all services
+- **Logs**: Accessible via `docker service logs <service-name>`
+
+### **Backup Strategy**
+
+- **Database Backups**: Automated daily backups via Ansible
+- **Backup Storage**: Digital Ocean Spaces
+- **Retention**: 7 days (configurable)
+- **Manual Backup**: `make ansible-backup-dev`
+
+### **Scaling**
+
+Services can be scaled horizontally:
+
+```bash
+# Scale backend to 3 replicas
+make ansible-scale-dev SERVICE=backend REPLICAS=3
+```
+
+### **Rollback**
+
+Rollback to previous service version:
+
+```bash
+# Rollback frontend service
+make ansible-rollback-dev SERVICE=frontend
+```
 
 ## Documentation
 

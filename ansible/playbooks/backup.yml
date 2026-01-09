@@ -1,0 +1,39 @@
+---
+# Backup PostgreSQL database
+# Usage: ansible-playbook backup.yml
+# Usage: ansible-playbook backup.yml -e "backup_schema=public upload_to_spaces=true"
+
+- name: Backup PostgreSQL Database
+  hosts: managers
+  gather_facts: yes
+
+  vars:
+    backup_schema: "{{ backup_schema | default('full') }}"
+    upload_to_spaces: "{{ upload_to_spaces | default(backup_upload_to_spaces) }}"
+
+  tasks:
+    - name: Display backup information
+      debug:
+        msg: |
+          Backing up {{ database_name }} database
+          Environment: {{ environment }}
+          Schema: {{ backup_schema }}
+          Upload to Spaces: {{ upload_to_spaces }}
+
+    - name: Execute backup
+      include_role:
+        name: backup
+      vars:
+        backup_upload_to_spaces: "{{ upload_to_spaces }}"
+      tags: [backup]
+
+    - name: List recent backups
+      find:
+        paths: "{{ backup_dir }}"
+        patterns: "{{ database_name }}_*.sql.gz"
+        age: "-7d"
+      register: recent_backups
+
+    - name: Display recent backups
+      debug:
+        msg: "Found {{ recent_backups.files | length }} backups in the last 7 days"

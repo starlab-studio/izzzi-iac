@@ -1,0 +1,542 @@
+# ============================================
+# IZZZI - Docker Swarm Production Stack
+# ============================================
+#
+# Architecture simplifiée:
+# - 1 PostgreSQL avec pgvector (schemas: public + ai)
+# - 1 Redis (DBs: 0=cache, 1=ai-cache, 2=celery-broker, 3=celery-results)
+# - Traefik pour reverse proxy et HTTPS
+#
+# Prerequisites:
+# 1. Initialize Swarm: docker swarm init
+# 2. Join workers: docker swarm join --token <token> <manager-ip>:2377
+# 3. Create overlay network: docker network create --driver overlay --attachable izzzi-network
+# 4. Label the DB node: docker node update --label-add db=true <node-id>
+# 5. Create secrets (see below)
+# 6. Set environment variables: DOMAIN, DATABASE_NAME, DOCKER_REGISTRY, IMAGE_TAG, etc.
+# 7. Deploy: docker stack deploy -c docker-stack.yml izzzi
+#
+# NOTE: Services use DATABASE_USER_FILE and DATABASE_PASSWORD_FILE to read from Docker secrets.
+# The application code must be modified to read from these files if they exist, otherwise
+# fall back to DATABASE_USER and DATABASE_PASSWORD environment variables.
+#
+# Required secrets:
+#   echo "izzzi_admin" | docker secret create db_user -
+#   echo "super_secure_password" | docker secret create db_password -
+#   echo "jwt_secret_key_here" | docker secret create jwt_secret -
+#   echo "jwt_refresh_secret_here" | docker secret create jwt_refresh_secret -
+#   echo "sk-..." | docker secret create openai_api_key -
+#   echo "sk_live_..." | docker secret create stripe_secret_key -
+#   echo "whsec_..." | docker secret create stripe_webhook_secret -
+#   echo "..." | docker secret create google_client_secret -
+#   echo "..." | docker secret create brevo_api_key -
+#   echo "..." | docker secret create aws_secret_access_key -
+#   echo "..." | docker secret create cognito_client_secret -
+
+version: "3.9"
+
+services:
+  # ============================================
+  # TRAEFIK - Reverse Proxy & Load Balancer
+  # ============================================
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      - "--providers.swarm=true"
+      - "--providers.swarm.exposedbydefault=false"
+      - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.network=izzzi-network"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+    ports:
+      - target: 80
+        published: 80
+        protocol: tcp
+        mode: host
+      - target: 443
+        published: 443
+        protocol: tcp
+        mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_letsencrypt:/letsencrypt
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
+        - "traefik.http.routers.traefik.entrypoints=websecure"
+        - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+        - "traefik.http.routers.traefik.service=api@internal"
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+        - "traefik.http.routers.traefik.middlewares=traefik-auth"
+        - "traefik.http.middlewares.traefik-auth.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+  # ============================================
+  # POSTGRESQL - Single Database with pgvector
+  # ============================================
+  postgres:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER_FILE: /run/secrets/db_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_DB: ${DATABASE_NAME:-izzzi_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - db_user
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.db == true
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+        reservations:
+          cpus: "1.0"
+          memory: 1G
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$(cat /run/secrets/db_user) -d ${DATABASE_NAME:-izzzi_db}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # REDIS - Cache & Celery Broker
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 1gb
+      --maxmemory-policy allkeys-lru
+      --save 60 1000
+      --save 300 10
+    volumes:
+      - redis_data:/data
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.db == true
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ============================================
+  # FRONTEND - Next.js Application
+  # ============================================
+  frontend:
+    image: ${DOCKER_REGISTRY}/izzzi:${IMAGE_TAG:-latest}
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE_URL: https://api.${DOMAIN}/api
+      NEXT_PUBLIC_AI_API_BASE_URL: https://ai.${DOMAIN}/api/v1
+      NEXT_PUBLIC_API_TIMEOUT: "30000"
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      NEXT_PUBLIC_POSTHOG_KEY: ${POSTHOG_KEY}
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+        - "traefik.http.routers.frontend.entrypoints=websecure"
+        - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+        - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+        - "traefik.http.services.frontend.loadbalancer.sticky.cookie=true"
+        - "traefik.http.services.frontend.loadbalancer.sticky.cookie.name=izzzi_frontend"
+        - "traefik.http.services.frontend.loadbalancer.healthcheck.path=/"
+        - "traefik.http.services.frontend.loadbalancer.healthcheck.interval=30s"
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # BACKEND - NestJS API
+  # ============================================
+  backend:
+    image: ${DOCKER_REGISTRY}/izzzi-backend:${IMAGE_TAG:-latest}
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      # Database
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: ${DATABASE_NAME:-izzzi_db}
+      DATABASE_USER: izzzi_admin
+      DATABASE_PASSWORD: "Nadmer12,12!"
+      # DATABASE_USER_FILE: /run/secrets/db_user
+      # DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      # Redis (DB 0 for cache)
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_DB: "0"
+      # JWT
+      # AUTH_JWT_SECRET_FILE: /run/secrets/jwt_secret
+      # AUTH_JWT_REFRESH_SECRET_FILE: /run/secrets/jwt_refresh_secret
+      AUTH_JWT_SECRET: dGTTzsrUipsLtglTFe5a6yC43wrHYHSqUj3YCgBista9GQYXPaw0yvV4nLTF/1vN
+      AUTH_JWT_REFRESH_SECRET: H1W+7qV3x58PI7lG+56gnMNsa7eNLWuLDH2S5RMlMmakcxD/OPegVUowxFQFj29r
+      AUTH_JWT_EXPIRES_IN: "15m"
+      AUTH_JWT_REFRESH_EXPIRES_IN: "7d"
+      # AWS
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      # AWS_SECRET_ACCESS_KEY_FILE: /run/secrets/aws_secret_access_key
+      AWS_SECRET_ACCESS_KEY: X7lHW1RuN0OuMMMfSPjQqskcNhCKIl8NHqjZ9e/DaEA
+      AWS_COGNITO_USER_POOL_CLIENT_ID: ${AWS_COGNITO_USER_POOL_CLIENT_ID}
+      # AWS_COGNITO_USER_POOL_CLIENT_SECRET_FILE: /run/secrets/cognito_client_secret
+      AWS_COGNITO_USER_POOL_ID: ${AWS_COGNITO_USER_POOL_ID}
+      # URLs
+      FRONTEND_DOMAIN_URL: https://${DOMAIN}
+      # Google OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      # GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
+      GOOGLE_CLIENT_SECRET: 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
+      GOOGLE_CALLBACK_URL: https://api.${DOMAIN}/api/auth/google/callback
+      # Stripe
+      # STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_secret_key
+      # STRIPE_WEBHOOK_SECRET_FILE: /run/secrets/stripe_webhook_secret
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY}
+      # Email (Brevo)
+      # BREVO_API_KEY_FILE: /run/secrets/brevo_api_key
+      BREVO_API_KEY: ${BREVO_API_KEY}
+      # AI Service
+      AI_SERVICE_URL: http://ai-api:8000
+    # secrets:
+    #   - db_user
+    #   - db_password
+    #   - jwt_secret
+    #   - jwt_refresh_secret
+    #   - stripe_secret_key
+    #   - stripe_webhook_secret
+    #   - google_client_secret
+    #   - brevo_api_key
+    #   - aws_secret_access_key
+    #   - cognito_client_secret
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.backend.rule=Host(`api.${DOMAIN}`)"
+        - "traefik.http.routers.backend.entrypoints=websecure"
+        - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+        - "traefik.http.services.backend.loadbalancer.server.port=3001"
+        - "traefik.http.services.backend.loadbalancer.healthcheck.path=/api/health"
+        - "traefik.http.services.backend.loadbalancer.healthcheck.interval=30s"
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3001/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # AI API - FastAPI Service
+  # ============================================
+  ai-api:
+    image: ${DOCKER_REGISTRY}/izzzi-ai:${IMAGE_TAG:-latest}
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: ${DATABASE_NAME:-izzzi_db}
+      DATABASE_SCHEMA: ai
+      DATABASE_USER_FILE: /run/secrets/db_user
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      DATABASE_POOL_SIZE: "20"
+      DATABASE_MAX_OVERFLOW: "10"
+      # JWT (same secret as backend)
+      JWT_ALGORITHM: HS256
+      # OpenAI
+      OPENAI_MODEL: gpt-4-turbo-preview
+      EMBEDDING_MODEL: text-embedding-3-small
+      # Redis (DBs 1-3 for AI service)
+      REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+      # API Config
+      API_V1_PREFIX: /api/v1
+      CORS_ORIGINS: '["https://${DOMAIN}","https://api.${DOMAIN}"]'
+      SERVICE_NAME: izzzi-ai-service
+      SERVICE_PORT: "8000"
+      # Backend URL
+      BACKEND_URL: http://backend:3001
+    secrets:
+      - db_user
+      - db_password
+      - jwt_secret
+      - openai_api_key
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.ai-api.rule=Host(`ai.${DOMAIN}`)"
+        - "traefik.http.routers.ai-api.entrypoints=websecure"
+        - "traefik.http.routers.ai-api.tls.certresolver=letsencrypt"
+        - "traefik.http.services.ai-api.loadbalancer.server.port=8000"
+        - "traefik.http.services.ai-api.loadbalancer.healthcheck.path=/health"
+        - "traefik.http.services.ai-api.loadbalancer.healthcheck.interval=30s"
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================
+  # CELERY WORKER - Background Tasks
+  # ============================================
+  celery-worker:
+    image: ${DOCKER_REGISTRY}/izzzi-ai:${IMAGE_TAG:-latest}
+    command: celery -A src.infrastructure.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: ${DATABASE_NAME:-izzzi_db}
+      DATABASE_SCHEMA: ai
+      DATABASE_USER_FILE: /run/secrets/db_user
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      DATABASE_POOL_SIZE: "10"
+      DATABASE_MAX_OVERFLOW: "5"
+      JWT_ALGORITHM: HS256
+      OPENAI_MODEL: gpt-4-turbo-preview
+      EMBEDDING_MODEL: text-embedding-3-small
+      REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+      BACKEND_URL: http://backend:3001
+    secrets:
+      - db_user
+      - db_password
+      - jwt_secret
+      - openai_api_key
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  # ============================================
+  # CELERY BEAT - Scheduled Tasks
+  # ============================================
+  celery-beat:
+    image: ${DOCKER_REGISTRY}/izzzi-ai:${IMAGE_TAG:-latest}
+    command: celery -A src.infrastructure.celery_app beat --loglevel=info
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      LOG_LEVEL: INFO
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+    networks:
+      - izzzi-network
+    deploy:
+      mode: replicated
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+        reservations:
+          cpus: "0.10"
+          memory: 128M
+
+# ============================================
+# VOLUMES
+# ============================================
+volumes:
+  traefik_letsencrypt:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ============================================
+# NETWORKS
+# ============================================
+networks:
+  izzzi-network:
+    driver: overlay
+    attachable: true
+
+# ============================================
+# SECRETS
+# ============================================
+secrets:
+  db_user:
+    external: true
+  db_password:
+    external: true
+  jwt_secret:
+    external: true
+  jwt_refresh_secret:
+    external: true
+  openai_api_key:
+    external: true
+  stripe_secret_key:
+    external: true
+  stripe_webhook_secret:
+    external: true
+  google_client_secret:
+    external: true
+  brevo_api_key:
+    external: true
+  aws_secret_access_key:
+    external: true
+  cognito_client_secret:
+    external: true

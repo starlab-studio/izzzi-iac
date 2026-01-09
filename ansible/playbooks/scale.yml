@@ -1,0 +1,73 @@
+---
+# Scale Docker service replicas
+# Usage: ansible-playbook scale.yml -e "service=backend replicas=3"
+
+- name: Scale Docker Service
+  hosts: managers
+  gather_facts: yes
+
+  vars:
+    target_service: "{{ service | default('') }}"
+    target_replicas: "{{ replicas | default('') }}"
+
+  pre_tasks:
+    - name: Validate parameters
+      fail:
+        msg: "Please specify service and replicas: -e 'service=<service_name> replicas=<number>'"
+      when: target_service == '' or target_replicas == ''
+
+    - name: Validate replicas is a number
+      fail:
+        msg: "Replicas must be a positive integer"
+      when: target_replicas | int < 1
+
+  tasks:
+    - name: Display scaling information
+      debug:
+        msg: |
+          Scaling service: {{ stack_name }}_{{ target_service }}
+          Current environment: {{ environment }}
+          Target replicas: {{ target_replicas }}
+
+    - name: Get current service info
+      command: docker service inspect {{ stack_name }}_{{ target_service }} --format "{{ '{{' }}.Spec.Mode.Replicated.Replicas{{ '}}' }}"
+      register: current_replicas
+      changed_when: false
+      failed_when: false
+
+    - name: Display current replicas
+      debug:
+        msg: "Current replicas: {{ current_replicas.stdout | default('unknown') }}"
+      when: current_replicas.rc == 0
+
+    - name: Scale service
+      command: >
+        docker service scale
+        {{ stack_name }}_{{ target_service }}={{ target_replicas }}
+      register: scale_result
+
+    - name: Display scale result
+      debug:
+        msg: "{{ scale_result.stdout_lines }}"
+
+    - name: Wait for scaling to complete
+      pause:
+        seconds: 15
+
+    - name: Verify service status
+      command: docker service ps {{ stack_name }}_{{ target_service }}
+      register: service_ps
+      changed_when: false
+
+    - name: Display service tasks
+      debug:
+        msg: "{{ service_ps.stdout_lines }}"
+
+    - name: Get updated service info
+      command: docker service ls --filter name={{ stack_name }}_{{ target_service }}
+      register: service_info
+      changed_when: false
+
+    - name: Display service info
+      debug:
+        msg: "{{ service_info.stdout_lines }}"

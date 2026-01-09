@@ -1,0 +1,158 @@
+---
+# Deploy Stack role - Deploy Docker Stack to Swarm
+
+- name: Ensure application deployment directory exists
+  file:
+    path: "{{ app_deployment_dir }}"
+    state: directory
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0755"
+  tags: [deploy, directories]
+
+- name: Template docker-stack.yml to manager
+  template:
+    src: docker-stack.yml.j2
+    dest: "{{ app_deployment_dir }}/docker-stack.yml"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0644"
+  tags: [deploy, stack, template]
+
+- name: Template .env file to manager
+  template:
+    src: env.j2
+    dest: "{{ app_deployment_dir }}/.env"
+    owner: "{{ app_user }}"
+    group: "{{ app_group }}"
+    mode: "0600"
+  tags: [deploy, env, template]
+
+- name: Check if Docker secrets exist
+  command: docker secret ls --format "{{ '{{' }}.Name{{ '}}' }}"
+  register: existing_secrets
+  changed_when: false
+  tags: [deploy, secrets]
+
+- name: Create Docker secrets
+  shell: |
+    if [ -n "{{ '{{' }} lookup('env', item | upper) {{ '}}' }}" ]; then
+      echo "{{ '{{' }} lookup('env', item | upper) {{ '}}' }}" | docker secret create {{ item }} -
+    else
+      echo "Warning: Secret {{ item }} not found in environment, using placeholder"
+      echo "PLACEHOLDER_{{ item }}" | docker secret create {{ item }} -
+    fi
+  loop: "{{ secrets_list }}"
+  when: item not in existing_secrets.stdout_lines
+  ignore_errors: yes
+  tags: [deploy, secrets]
+
+- name: Pull latest images on all nodes
+  shell: |
+    for image in {{ docker_registry }}/izzzi:{{ image_tag }} {{ docker_registry }}/izzzi-backend:{{ image_tag }} {{ docker_registry }}/izzzi-ai:{{ image_tag }}; do
+      docker pull $image || true
+    done
+  delegate_to: "{{ item }}"
+  loop: "{{ groups['managers'] + groups['workers'] }}"
+  ignore_errors: yes
+  tags: [deploy, pull]
+
+- name: Deploy Docker stack
+  shell: >
+    set -a
+    . {{ app_deployment_dir }}/.env
+    set +a
+    docker stack deploy
+    --compose-file {{ app_deployment_dir }}/docker-stack.yml
+    --with-registry-auth
+    --resolve-image always
+    {{ stack_name }}
+  args:
+    executable: /bin/bash
+  become: yes
+  become_user: "{{ app_user }}"
+  tags: [deploy, stack]
+
+- name: Wait for services to be running
+  command: docker stack services {{ stack_name }} --format "{{ '{{' }}.Name{{ '}}' }}"
+  register: stack_services
+  until: stack_services.stdout_lines | length > 0
+  retries: 10
+  delay: 5
+  tags: [deploy, verify]
+
+- name: Wait for backend to be healthy (60s)
+  shell: |
+    docker service ps {{ stack_name }}_backend --filter "desired-state=running" --format "{{ '{{' }}.CurrentState{{ '}}' }}" | grep -q "Running"
+  register: backend_health
+  until: backend_health.rc == 0
+  retries: 12
+  delay: 5
+  ignore_errors: yes
+  tags: [deploy, verify]
+
+- name: Wait for AI service to be healthy (60s)
+  shell: |
+    docker service ps {{ stack_name }}_ai-api --filter "desired-state=running" --format "{{ '{{' }}.CurrentState{{ '}}' }}" | grep -q "Running"
+  register: ai_health
+  until: ai_health.rc == 0
+  retries: 12
+  delay: 5
+  ignore_errors: yes
+  tags: [deploy, verify]
+
+- name: Display backend logs (last 30 lines)
+  shell: docker service logs {{ stack_name }}_backend --tail 30 2>&1
+  register: backend_logs
+  changed_when: false
+  tags: [deploy, verify]
+
+- name: Show backend logs
+  debug:
+    msg: "{{ backend_logs.stdout_lines }}"
+  tags: [deploy, verify]
+
+- name: Display AI logs (last 30 lines)
+  shell: docker service logs {{ stack_name }}_ai-api --tail 30 2>&1
+  register: ai_logs
+  changed_when: false
+  tags: [deploy, verify]
+
+- name: Show AI logs
+  debug:
+    msg: "{{ ai_logs.stdout_lines }}"
+  tags: [deploy, verify]
+
+- name: Scale backend service to 2 replicas
+  command: docker service scale {{ stack_name }}_backend=2
+  when: backend_health.rc == 0
+  ignore_errors: yes
+  tags: [deploy, scale]
+
+- name: Scale AI service to 2 replicas
+  command: docker service scale {{ stack_name }}_ai-api=2
+  when: ai_health.rc == 0
+  ignore_errors: yes
+  tags: [deploy, scale]
+
+- name: Display stack status
+  command: docker stack ps {{ stack_name }} --no-trunc
+  register: stack_status
+  changed_when: false
+  tags: [deploy, status]
+
+- name: Show stack deployment status
+  debug:
+    msg: "{{ stack_status.stdout_lines }}"
+  tags: [deploy, status]
+
+- name: Display services status
+  command: docker stack services {{ stack_name }}
+  register: services_status
+  changed_when: false
+  tags: [deploy, status]
+
+- name: Show services status
+  debug:
+    msg: "{{ services_status.stdout_lines }}"
+  tags: [deploy, status]

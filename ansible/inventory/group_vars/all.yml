@@ -1,0 +1,105 @@
+---
+# Global variables for all hosts
+
+# Docker Configuration
+docker_version: "latest"
+docker_compose_version: "latest"
+docker_log_driver: "json-file"
+docker_log_max_size: "10m"
+docker_log_max_file: "3"
+
+# Docker Swarm Configuration
+swarm_network_name: izzzi-network
+swarm_network_driver: overlay
+swarm_network_attachable: true
+stack_name: izzzi
+
+# Database Configuration
+database_name: izzzi
+database_schemas:
+  - public
+  - ai
+postgresql_version: "18"
+postgres_image: "pgvector/pgvector:pg18"
+
+# Redis Configuration
+redis_image: "redis:7-alpine"
+redis_dbs:
+  cache_backend: 0
+  cache_ai: 1
+  celery_broker: 2
+  celery_results: 3
+
+# Backup Configuration
+backup_retention_days: 7
+backup_dir: /home/deploy/backups
+backup_postgres_compress: true
+backup_upload_to_spaces: true
+
+# Digital Ocean Spaces (for backups)
+spaces_region: fra1
+spaces_bucket_backups: "izzzi-{{ environment }}-backups"
+spaces_endpoint: "https://{{ spaces_region }}.digitaloceanspaces.com"
+
+# Application Configuration
+app_deployment_dir: /home/deploy/izzzi
+app_user: deploy
+app_group: deploy
+
+# Docker Registry (Docker Hub)
+docker_registry: "johnnyhelloworld1"
+image_tag: "latest"
+
+# Services Replicas (can be overridden per environment)
+replicas:
+  frontend: 3
+  backend: 2
+  ai_api: 2
+  celery_worker: 2
+  postgres: 1
+  redis: 1
+
+# Docker Secrets List
+secrets_list:
+  - db_user
+  - db_password
+  - jwt_secret
+  - jwt_refresh_secret
+  - openai_api_key
+  - stripe_secret_key
+  - stripe_webhook_secret
+  - google_client_secret
+  - brevo_api_key
+  - aws_secret_access_key
+  - cognito_client_secret
+  - spaces_access_key
+  - spaces_secret_key
+
+# Monitoring & Health Checks
+health_check_interval: "30s"
+health_check_timeout: "10s"
+health_check_retries: 3
+health_check_start_period: "40s"
+
+# System Configuration
+timezone: "Europe/Paris"
+system_packages:
+  - curl
+  - htop
+  - vim
+  - git
+  - jq
+  - postgresql-client
+  - unzip
+  - s3cmd
+  - tree
+
+# UFW Firewall Ports (managed by cloud firewall, but configured for redundancy)
+ufw_allowed_ports:
+  - { port: 22, proto: tcp, comment: "SSH" }
+  - { port: 80, proto: tcp, comment: "HTTP" }
+  - { port: 443, proto: tcp, comment: "HTTPS" }
+  - { port: 2377, proto: tcp, comment: "Swarm management" }
+  - { port: 7946, proto: tcp, comment: "Swarm discovery TCP" }
+  - { port: 7946, proto: udp, comment: "Swarm discovery UDP" }
+  - { port: 4789, proto: udp, comment: "Swarm overlay network" }

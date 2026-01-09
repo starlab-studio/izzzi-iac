@@ -1,0 +1,62 @@
+---
+# Swarm Manager role - Initialize Docker Swarm on manager nodes
+
+- name: Check if Swarm is already initialized
+  command: docker info
+  register: docker_info
+  changed_when: false
+  failed_when: false
+  tags: [swarm, init]
+
+- name: Initialize Docker Swarm
+  command: >
+    docker swarm init
+    --advertise-addr {{ swarm_advertise_addr }}
+  when: "'Swarm: inactive' in docker_info.stdout"
+  register: swarm_init_result
+  tags: [swarm, init]
+
+- name: Get Swarm worker join token
+  command: docker swarm join-token -q worker
+  register: swarm_worker_token
+  changed_when: false
+  tags: [swarm, token]
+
+- name: Store worker join token as fact
+  set_fact:
+    swarm_worker_join_token: "{{ swarm_worker_token.stdout }}"
+  tags: [swarm, token]
+
+- name: Get Swarm manager join token
+  command: docker swarm join-token -q manager
+  register: swarm_manager_token
+  changed_when: false
+  tags: [swarm, token]
+
+- name: Store manager join token as fact
+  set_fact:
+    swarm_manager_join_token: "{{ swarm_manager_token.stdout }}"
+  tags: [swarm, token]
+
+- name: Add label db=true to manager node
+  command: docker node update --label-add db=true {{ ansible_hostname }}
+  when: "(swarm_init_result is defined and swarm_init_result.changed) or (docker_info.stdout is defined and 'Swarm: active' in docker_info.stdout)"
+  changed_when: false
+  tags: [swarm, labels]
+
+- name: Create overlay network for application
+  docker_network:
+    name: "{{ swarm_network_name }}"
+    driver: "{{ swarm_network_driver }}"
+    attachable: "{{ swarm_network_attachable }}"
+    scope: swarm
+  tags: [swarm, network]
+
+- name: Display Swarm status
+  debug:
+    msg: |
+      Docker Swarm initialized successfully
+      Worker join token: {{ swarm_worker_join_token }}
+      Manager join token: {{ swarm_manager_join_token }}
+      Advertise address: {{ swarm_advertise_addr }}
+  tags: [swarm, status]

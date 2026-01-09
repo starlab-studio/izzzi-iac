@@ -1,0 +1,43 @@
+# Ansible Inventory for PRODUCTION Environment
+# This file can be generated from Terraform outputs or filled manually
+#
+# To generate from Terraform:
+# cd terraform/envs/prod && terraform output -json | jq -r '.manager_ip.value' > manager_ip.txt
+
+all:
+  children:
+    managers:
+      hosts:
+        manager1:
+          ansible_host: "207.154.237.124"
+          private_ip: "10.10.0.3"
+
+    workers:
+      hosts:
+        worker1:
+          ansible_host: "167.172.185.174"
+          private_ip: "10.10.0.4"
+        worker2:
+          ansible_host: "157.230.99.208"
+          private_ip: "10.10.0.2"
+
+  vars:
+    ansible_user: deploy
+    ansible_ssh_private_key_file: ~/.ssh/izzzi_deploy
+    ansible_python_interpreter: /usr/bin/python3
+
+    # Environment specific variables
+    environment: production
+    domain: smoothbill.fr
+
+    # Docker Swarm
+    swarm_advertise_addr: "{{ hostvars[groups['managers'][0]].private_ip }}"
+
+    # Database (single instance on manager)
+    database_host: "{{ hostvars[groups['managers'][0]].private_ip }}"
+    database_port: 5432
+    database_name: izzzi
+
+    # Redis (single instance on manager)
+    redis_host: "{{ hostvars[groups['managers'][0]].private_ip }}"
+    redis_port: 6379
